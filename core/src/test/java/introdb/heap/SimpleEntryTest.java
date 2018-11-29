@@ -4,13 +4,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+
+import static java.nio.file.StandardOpenOption.APPEND;
 
 class SimpleEntryTest {
 
@@ -31,7 +33,7 @@ class SimpleEntryTest {
         save(new SimpleEntry(2, 5));
         save(new SimpleEntry(8, 23));
 
-        try (FileInputStream fis = new FileInputStream(filePath.toFile())) {
+        try (InputStream fis = Files.newInputStream(filePath)) {
             try (ObjectInputStream input = new ObjectInputStream(fis)) {
                 boolean cont = true;
                 while (cont) {
@@ -47,10 +49,12 @@ class SimpleEntryTest {
     }
 
     private void save(SimpleEntry simpleEntry) throws IOException {
-        try (FileOutputStream fout = new FileOutputStream(filePath.toFile(), true)) {
+//        try (FileOutputStream fout = new FileOutputStream(filePath.toFile(), true)) {
+        try (OutputStream fout = Files.newOutputStream(filePath, APPEND)) {
             try (ObjectOutputStream oos = new ObjectOutputStream(fout)) {
                 oos.writeObject(simpleEntry);
             }
         }
     }
+
 }
