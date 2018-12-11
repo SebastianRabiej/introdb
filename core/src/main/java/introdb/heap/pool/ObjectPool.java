@@ -1,18 +1,18 @@
 package introdb.heap.pool;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ObjectPool<T> {
 
 	private final ObjectFactory<T> fcty;
 	private final ObjectValidator<T> validator;
 	private final int maxPoolSize;
+	private final ConcurrentLinkedQueue<T> unUsedObjects = new ConcurrentLinkedQueue<>();
 	private final ConcurrentLinkedQueue<CompletableFuture> uncompletedFutures = new ConcurrentLinkedQueue<>();
-	private final List<T> poll = new ArrayList<>();
-	private final List<T> inUse = new ArrayList<>();
+	private final AtomicInteger unUsedSize = new AtomicInteger(0);
+	private final AtomicInteger inUseSize = new AtomicInteger(0);
 
 	public ObjectPool(ObjectFactory<T> fcty, ObjectValidator<T> validator) {
 		this(fcty,validator,25);
@@ -32,11 +32,11 @@ public class ObjectPool<T> {
 	 * @return
 	 */
 	public CompletableFuture<T> borrowObject() {
-		IncreasePoolIfHaveTo();
-		final CompletableFuture completableFuture = new CompletableFuture();
-		final T unUsedObject = findUnUsedObject();
+		increasePoolIfHaveTo();
+		var completableFuture = new CompletableFuture();
+		T unUsedObject = unUsedObjects.poll();
 		if(unUsedObject != null){
-			inUse.add(unUsedObject);
+			changeCountersAsUsedObject();
 			return completableFuture.completeAsync(() -> unUsedObject);
 		}
 		uncompletedFutures.offer(completableFuture);
@@ -44,10 +44,11 @@ public class ObjectPool<T> {
 	}
 
 	public void returnObject(T object) {
-		inUse.remove(object);
+		unUsedObjects.offer(object);
+		changeCountersAsUnUsedObject();
 		if(!uncompletedFutures.isEmpty()){
-			final CompletableFuture oldestFeature = uncompletedFutures.poll();
-			final T unUsedObject = findUnUsedObject();
+			var oldestFeature = uncompletedFutures.poll();
+			T unUsedObject = unUsedObjects.poll();
 			oldestFeature.completeAsync(() -> unUsedObject);
 		}
 	}
@@ -56,28 +57,29 @@ public class ObjectPool<T> {
 	}
 
 	public int getPoolSize() {
-		return poll.size();
+		return unUsedSize.get() + inUseSize.get();
 	}
 
 	public int getInUse() {
-		return inUse.size();
+		return inUseSize.get();
 	}
 
-	private void IncreasePoolIfHaveTo() {
+	private void increasePoolIfHaveTo() {
 		if(getPoolSize() == getInUse()){
 			if(getPoolSize() < maxPoolSize){
-				poll.add(fcty.create());
+				unUsedObjects.offer(fcty.create());
+				unUsedSize.incrementAndGet();
 			}
 		}
 	}
 
-	private T findUnUsedObject() {
-		for (T t : poll) {
-			if(!inUse.contains(t) && validator.validate(t)){
-				return t;
-			}
-		}
-		return null;
+	private void changeCountersAsUsedObject() {
+		inUseSize.getAndIncrement();
+		unUsedSize.decrementAndGet();
 	}
 
+	private void changeCountersAsUnUsedObject() {
+		inUseSize.decrementAndGet();
+		unUsedSize.getAndIncrement();
+	}
 }
