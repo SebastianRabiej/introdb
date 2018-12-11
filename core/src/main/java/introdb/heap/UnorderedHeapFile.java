@@ -16,6 +16,7 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import introdb.heap.Record.Mark;
 
@@ -28,6 +29,7 @@ class UnorderedHeapFile implements Store, Iterable<Record> {
 	private final int pageSize;
  
 	private final byte[] zeroPage;
+	private final ReentrantReadWriteLock lock;
 	private ByteBuffer lastPage;
 	private int lastPageNumber=-1;
 
@@ -40,50 +42,73 @@ class UnorderedHeapFile implements Store, Iterable<Record> {
 		this.maxNrPages = maxNrPages;
 		this.pageSize = pageSize;
 		this.zeroPage = new byte[pageSize];
+		this.lock = new ReentrantReadWriteLock(true);
 	}
 
 	@Override
 	public void put(Entry entry) throws IOException, ClassNotFoundException {
-		
-		assertTooManyPages();
-		
-		var newRecord = Record.of(entry);
+		lock.writeLock().lock();
+		try {
+			lock.readLock().lock();
+			try {
+				assertTooManyPages();
 
-		assertRecordSize(newRecord);
+				var newRecord = Record.of(entry);
 
-		var iterator = cursor();
-		while(iterator.hasNext()){
-			var record = iterator.next();
-			if(Arrays.equals(newRecord.key(),record.key())){
-				iterator.remove();
-				break;
+				assertRecordSize(newRecord);
+
+				var iterator = cursor();
+				while (iterator.hasNext()) {
+					var record = iterator.next();
+					if (Arrays.equals(newRecord.key(), record.key())) {
+						iterator.remove();
+						break;
+					}
+				}
+
+				if ((lastPage != null && lastPage.remaining() < newRecord.size())
+					|| lastPage == null) {
+					lastPage = ByteBuffer.allocate(pageSize);
+					lastPageNumber++;
+				}
+
+				var src = newRecord.write(() -> lastPage);
+
+				writePage(src, lastPageNumber);
 			}
-		}
+			finally {
+				lock.readLock().unlock();
+			}
+		}finally {
 
-		if((lastPage!=null && lastPage.remaining()<newRecord.size()) || lastPage==null  ){
-			lastPage = ByteBuffer.allocate(pageSize);
-			lastPageNumber++;			
+			lock.writeLock().unlock();
 		}
-		
-		var src = newRecord.write(() -> lastPage);
-
-		writePage(src, lastPageNumber);
 	}
 
 	@Override
 	public Object get(Serializable key) throws IOException, ClassNotFoundException {
+		lock.writeLock().lock();
+		try {
+			lock.readLock().lock();
+			try {
+				// serialize key
+				var keySer = serializeKey(key);
 
-		// serialize key
-		var keySer = serializeKey(key);
-		
-		var iterator = cursor();
-		while(iterator.hasNext()){
-			var record = iterator.next();
-			if(Arrays.equals(keySer, record.key())){
-				return deserializeValue(record.value());
+				var iterator = cursor();
+				while (iterator.hasNext()) {
+					var record = iterator.next();
+					if (Arrays.equals(keySer, record.key())) {
+						return deserializeValue(record.value());
+					}
+				}
+				return null;
+			} finally {
+				lock.readLock().unlock();
 			}
 		}
-		return null;
+		finally {
+			lock.writeLock().unlock();
+		}
 	}
 
 	public Object remove(Serializable key) throws IOException, ClassNotFoundException {
